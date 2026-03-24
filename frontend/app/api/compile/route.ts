@@ -16,7 +16,7 @@ interface CompilePayload {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const BUILD_TIMEOUT_MS = 60_000; // 60 seconds
+const BUILD_TIMEOUT_MS = 60_000;
 
 /**
  * Validate that every file path in the payload is safe:
