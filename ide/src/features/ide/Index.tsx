@@ -30,6 +30,9 @@ import { Terminal } from "@/components/ide/Terminal";
 import XdrInspector from "@/components/tools/XdrInspector";
 // import { Toolbar } from "@/components/ide/Toolbar";
 import { OutlineView } from "@/components/sidebar/OutlineView";
+// import { ActivityBar } from "@/components/layout/ActivityBar";
+import { StarterProjectWizard } from "@/components/modals/StarterProjectWizard";
+import { type NetworkKey } from "@/lib/networkConfig";
 import { ActivityBar } from "@/components/layout/ActivityBar";
 import { NETWORK_CONFIG, type NetworkKey } from "@/lib/networkConfig";
 import { type FileNode } from "@/lib/sample-contracts";
@@ -204,6 +207,14 @@ export default function Index() {
   const [deployedContractId, setDeployedContractId] = useState<string | null>(null);
 
   const [bottomTab, setBottomTab] = useState<"console" | "events" | "proptest">("console");
+
+  const [wizardOpen, setWizardOpen] = useState(false);
+
+  useEffect(() => {
+    if (files.length === 0) {
+      setWizardOpen(true);
+    }
+  }, [files.length]);
 
   const [invokeState, setInvokeState] = useState<{
     phase: "idle" | "preparing" | "success" | "failed";
@@ -863,6 +874,7 @@ export default function Index() {
         <StatusBar language={activeFileContext?.language} />
       </div>
 
+      <StarterProjectWizard open={wizardOpen} onOpenChange={setWizardOpen} />
       {/* ── Deployment progress modal ──────────────────────────────── */}
       <DeploymentStepper
         open={isDeployModalOpen}
