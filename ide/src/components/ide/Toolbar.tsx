@@ -30,6 +30,10 @@ import { UserMenu } from "@/components/auth/UserMenu";
 import { SaveToCloudButton } from "@/components/cloud/SaveToCloudButton";
 import { useAuth } from "@/hooks/useAuth";
 import useEnvironmentSlotsStore from "@/store/useEnvironmentSlotsStore";
+import { LiveShareButton } from "@/components/ide/LiveShareButton";
+import { useLiveShareStore } from "@/store/useLiveShareStore";
+
+import NotificationCenter from "@/components/notifications/NotificationCenter";
 
 type BuildState = "idle" | "building" | "success" | "error";
 
@@ -99,8 +103,9 @@ export function Toolbar({
         return "#94a3b8";
     }
   };
-
+  const { mode } = useLiveShareStore();
   const { isAuthenticated } = useAuth();
+  const isReadOnly = mode === "recipient";
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
@@ -136,6 +141,7 @@ export function Toolbar({
             onClick={onCompile}
             isBuilding={isCompiling}
             state={isCompiling ? "building" : buildState}
+            disabled={isReadOnly}
           />
 
           <Button
@@ -143,6 +149,7 @@ export function Toolbar({
             variant="ghost"
             size="sm"
             className="h-8 gap-1.5 text-xs"
+            disabled={isReadOnly}
           >
             <Upload className="h-3.5 w-3.5" />
             Deploy
@@ -154,6 +161,7 @@ export function Toolbar({
             size="sm"
             onClick={onTest}
             className="h-8 gap-1.5 text-xs"
+            disabled={isReadOnly}
           >
             <TestTube className="h-3.5 w-3.5" />
             Test
@@ -165,7 +173,7 @@ export function Toolbar({
               variant="ghost"
               size="sm"
               onClick={onRunClippy}
-              disabled={isRunningClippy}
+              disabled={isRunningClippy || isReadOnly}
               className="h-8 gap-1.5 text-xs"
             >
               {isRunningClippy ? (
@@ -183,7 +191,7 @@ export function Toolbar({
               variant="ghost"
               size="sm"
               onClick={onRunAudit}
-              disabled={isRunningAudit}
+              disabled={isRunningAudit || isReadOnly}
               className="h-8 gap-1.5 text-xs"
             >
               {isRunningAudit ? (
@@ -202,6 +210,7 @@ export function Toolbar({
             variant="ghost"
             size="sm"
             className="h-8 gap-1.5 text-xs"
+            disabled={isReadOnly}
           >
             <Github className="h-3.5 w-3.5" />
             Import
@@ -211,6 +220,7 @@ export function Toolbar({
             variant="ghost"
             size="sm"
             className="h-8 gap-1.5 text-xs"
+            disabled={isReadOnly}
           >
             <FileCode2 className="h-3.5 w-3.5" />
             Export CI
@@ -221,13 +231,15 @@ export function Toolbar({
             size="sm"
             className={`h-8 gap-1.5 text-xs ${hasMockState ? "text-primary" : ""}`}
             title="Mock Ledger State"
+            disabled={isReadOnly}
           >
             <Database className="h-3.5 w-3.5" />
-            Mock State
-            {hasMockState ? ` (${mockLedgerState.entries.length})` : ""}
+            Mock State{hasMockState ? ` (${mockLedgerState.entries.length})` : ""}
           </Button>
 
-          <SaveToCloudButton />
+          <SaveToCloudButton disabled={isReadOnly} />
+
+          <LiveShareButton />
 
           {saveStatus ? (
             <span className="ml-2 font-mono text-[10px] text-muted-foreground">
@@ -237,6 +249,7 @@ export function Toolbar({
         </div>
 
         <div className="flex items-center gap-4">
+          <NotificationCenter />
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
             <Network className="h-3.5 w-3.5" />
             <div className="flex items-center gap-3">
@@ -252,6 +265,7 @@ export function Toolbar({
                   className="min-w-[108px] rounded border border-border bg-secondary px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
                   aria-label="Environment slot"
                   title="Current environment"
+                  disabled={isReadOnly}
                 >
                   {Object.values(slots).map((s) => (
                     <option key={s.id} value={s.id}>
@@ -272,6 +286,7 @@ export function Toolbar({
                 value={network}
                 onChange={(e) => changeNetwork(e.target.value as NetworkKey)}
                 className="min-w-[100px] rounded border border-border bg-secondary px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                disabled={isReadOnly}
               >
                 <option value="testnet">Testnet</option>
                 <option value="futurenet">Futurenet</option>
@@ -286,12 +301,15 @@ export function Toolbar({
             size="sm"
             onClick={() => setXdrOpen((prev) => !prev)}
             className="h-8 gap-1.5 text-xs"
+            disabled={isReadOnly}
           >
             XDR
           </Button>
+          <LiveShareButton />
           <WalletManager />
           {isAuthenticated ? <UserMenu /> : <SignInButton />}
           <button
+            onClick={() => setSettingsOpen(true)}
             className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             title="Settings"
             aria-label="Settings"
@@ -312,6 +330,7 @@ export function Toolbar({
             isBuilding={isCompiling}
             state={isCompiling ? "building" : buildState}
             compact
+            disabled={isReadOnly}
           />
         </div>
 
@@ -333,6 +352,7 @@ export function Toolbar({
               className="rounded border border-border bg-secondary px-1 py-0.5 text-[10px] text-foreground focus:outline-none"
               aria-label="Environment slot"
               title="Current environment"
+              disabled={isReadOnly}
             >
               {Object.values(slots).map((s) => (
                 <option key={s.id} value={s.id}>
@@ -352,6 +372,7 @@ export function Toolbar({
               value={network}
               onChange={(e) => changeNetwork(e.target.value as NetworkKey)}
               className="rounded border border-border bg-secondary px-1.5 py-0.5 text-[10px] text-foreground focus:outline-none"
+              disabled={isReadOnly}
             >
               <option value="testnet">Testnet</option>
               <option value="futurenet">Futurenet</option>
@@ -371,6 +392,7 @@ export function Toolbar({
             size="sm"
             onClick={() => setXdrOpen((prev) => !prev)}
             className="h-7 px-2 text-[10px]"
+            disabled={isReadOnly}
           >
             XDR
           </Button>
@@ -387,7 +409,6 @@ export function Toolbar({
           </button>
         </div>
       </div>
-
       {/* ── Mobile expanded menu ── */}
       {mobileMenuOpen ? (
         <div className="flex flex-col gap-2 border-b border-border px-2 pb-2 md:hidden">
@@ -396,7 +417,7 @@ export function Toolbar({
               onCompile();
               setMobileMenuOpen(false);
             }}
-            disabled={isCompiling}
+            disabled={isCompiling || isReadOnly}
             className="h-9 flex-1 gap-1 text-[11px]"
           >
             <Play className="h-3 w-3" />
@@ -409,6 +430,7 @@ export function Toolbar({
               setMobileMenuOpen(false);
             }}
             variant="outline"
+            disabled={isReadOnly}
             className="h-9 flex-1 gap-1 text-[11px]"
           >
             <Upload className="h-3 w-3" />
@@ -423,6 +445,7 @@ export function Toolbar({
               onTest();
               setMobileMenuOpen(false);
             }}
+            disabled={isReadOnly}
           >
             Test
           </Button>
@@ -436,7 +459,7 @@ export function Toolbar({
                 onRunClippy();
                 setMobileMenuOpen(false);
               }}
-              disabled={isRunningClippy}
+              disabled={isRunningClippy || isReadOnly}
             >
               {isRunningClippy ? (
                 <Loader2 className="h-3 w-3 animate-spin" />
@@ -456,7 +479,7 @@ export function Toolbar({
                 onRunAudit();
                 setMobileMenuOpen(false);
               }}
-              disabled={isRunningAudit}
+              disabled={isRunningAudit || isReadOnly}
             >
               {isRunningAudit ? (
                 <Loader2 className="h-3 w-3 animate-spin" />
@@ -474,6 +497,7 @@ export function Toolbar({
               setImportOpen(true);
               setMobileMenuOpen(false);
             }}
+            disabled={isReadOnly}
           >
             <Github className="h-3 w-3" />
             Import GitHub
@@ -486,6 +510,7 @@ export function Toolbar({
               setCiOpen(true);
               setMobileMenuOpen(false);
             }}
+            disabled={isReadOnly}
           >
             <FileCode2 className="h-3 w-3" />
             Export CI
@@ -496,11 +521,13 @@ export function Toolbar({
               setStateEditorOpen(true);
               setMobileMenuOpen(false);
             }}
+            disabled={isReadOnly}
           >
             <Database className="h-3 w-3" />
             Mock State
           </Button>
 
+          <LiveShareButton />
           <Button
             variant="outline"
             className="h-9 flex-1 gap-1 text-[11px]"
@@ -515,10 +542,7 @@ export function Toolbar({
         </div>
       ) : null}
 
-      <ImportGithubModal
-        open={importOpen}
-        onClose={() => setImportOpen(false)}
-      />
+      <ImportGithubModal open={importOpen} onClose={() => setImportOpen(false)} />
       <CiConfigGenerator open={ciOpen} onOpenChange={setCiOpen} />
       <StateMockEditor
         open={stateEditorOpen}

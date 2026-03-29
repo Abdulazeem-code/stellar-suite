@@ -24,6 +24,7 @@ import type * as Monaco from "monaco-editor";
 import React, { Suspense, useEffect, useRef, useState } from "react";
 import { analyzeMathSafety } from "../../lib/mathSafetyAnalyzer";
 import { useMathSafetyStore } from "../../store/useMathSafetyStore";
+import { useUserSettingsStore } from "@/store/useUserSettingsStore";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { GitBlameLines } from "./GitBlameLines";
 import { getAllMonacoCompletions } from "@/utils/proptestSnippets";
@@ -32,7 +33,7 @@ import { GitGutterMarkers } from "./GitGutterMarkers";
 import { git } from "@/lib/git";
 import "@/styles/editor-gutter.css";
 import { referenceProvider } from "@/lib/referenceProvider";
-import { useUserSettingsStore } from "@/store/useUserSettingsStore";
+import { useLiveShare } from "@/hooks/useLiveShare";
 
 interface CodeEditorProps {
   onCursorChange?: (line: number, col: number) => void;
@@ -47,6 +48,7 @@ const CodeEditor: React.FC<CodeEditorProps> = ({ onCursorChange, onSave }) => {
   const { getFileCoverage } = useCoverageStore();
   const { setJumpToLine, saveViewState, getViewState } = useEditorStore();
   const { openErrorHelp } = useErrorHelpStore();
+  const { mode, isSharing, broadcastContentChange } = useLiveShare();
   const rustProviderRegistered = useRef(false);
 
   const monacoRef = useRef<typeof Monaco | null>(null);
@@ -81,12 +83,6 @@ const CodeEditor: React.FC<CodeEditorProps> = ({ onCursorChange, onSave }) => {
     activeFileIdRef.current = activeFileId;
   }, [activeFileId]);
 
-  useTestGutter({
-    editor: editorRef.current,
-    monaco: monacoRef.current,
-    filePath: activeFileId,
-  });
-
   const activeFile = React.useMemo(() => {
     const findNode = (
       nodes: FileNode[],
@@ -109,6 +105,11 @@ const CodeEditor: React.FC<CodeEditorProps> = ({ onCursorChange, onSave }) => {
   const handleEditorChange: OnChange = (value) => {
     if (value !== undefined) {
       updateFileContent(activeTabPath, value);
+      
+      // Broadcast change if in sharing mode
+      if (isSharing && mode === "broadcaster") {
+        broadcastContentChange(activeTabPath, value);
+      }
 
       // Re-index files when content changes (with debouncing)
       setTimeout(() => {
@@ -671,6 +672,7 @@ const CodeEditor: React.FC<CodeEditorProps> = ({ onCursorChange, onSave }) => {
             onMount={handleEditorDidMount}
             options={{
               fontSize: fontSize,
+              readOnly: mode === "recipient",
               minimap: { enabled: false },
               scrollBeyondLastLine: false,
               automaticLayout: true,
