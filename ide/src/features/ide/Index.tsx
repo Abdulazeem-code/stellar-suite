@@ -1,35 +1,106 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { nativeToScVal } from "@stellar/stellar-sdk";
 import {
   PanelRightClose,
   PanelRightOpen,
+  Binary,
+  Activity,
 } from "lucide-react";
+import { toast } from "sonner";
 
 import CodeEditor from "@/components/ide/CodeEditor";
+import { BinaryDiffTool } from "@/features/ide/BinaryDiffTool";
 import { ContractPanel } from "@/components/ide/ContractPanel";
+import { DeploymentStepper } from "@/components/ide/DeploymentStepper";
 import { DeploymentsView } from "@/components/ide/DeploymentsView";
-import { EditorTabs } from "@/components/ide/EditorTabs";
+import { MultisigView } from "@/components/ide/MultisigView";
+import { LiquidityPoolSimulator } from "@/components/ide/LiquidityPoolSimulator";
+import { GitPane } from "@/components/ide/GitPane";
+import { DiffEditorPane } from "@/components/editor/DiffEditorPane";
+import { CommentsPane } from "@/components/editor/CommentsPane";
+// import { EditorTabs } from "@/components/ide/EditorTabs";
 import { FileExplorer } from "@/components/ide/FileExplorer";
 import { IdentitiesView } from "@/components/ide/IdentitiesView";
-import { SearchPane } from "@/components/ide/SearchPane";
+import { GlobalSearch } from "@/components/sidebar/GlobalSearch";
 import { SecurityView } from "@/components/ide/SecurityView";
+import { TestingView, TemplatesView } from "@/components/ide/TestingView";
+import { GeneratePropertyTest } from "@/components/Testing/GeneratePropertyTest";
+import { useProptestOutputWatcher } from "@/hooks/useProptestOutputWatcher";
+import { ProptestView } from "@/components/Panels/ProptestView";
+import { EventsPane } from "@/components/ide/EventsPane";
+import { ReferencesPane } from "@/components/ide/ReferencesPane";
+import { InspectorPane } from "@/components/ide/InspectorPane";
 import { StatusBar } from "@/components/ide/StatusBar";
 import { Terminal } from "@/components/ide/Terminal";
+import { useTerminalBridge } from "@/hooks/useTerminalBridge";
+import { TestResultsLog } from "@/components/terminal/TestResultsLog";
+// import TestExplorer from "@/components/ide/TestExplorer";
+import XdrInspector from "@/components/tools/XdrInspector";
 import { Toolbar } from "@/components/ide/Toolbar";
+import { OutlineView } from "@/components/sidebar/OutlineView";
+import { FuzzingPanel } from "@/components/sidebar/FuzzingPanel";
+import { AssetManager } from "@/components/sidebar/AssetManager";
+import { TutorialsPane } from "@/components/sidebar/TutorialsPane";
+// import { ActivityBar } from "@/components/layout/ActivityBar";
+import { StarterProjectWizard } from "@/components/modals/StarterProjectWizard";
 import { ActivityBar } from "@/components/layout/ActivityBar";
-import { type NetworkKey } from "@/lib/networkConfig";
+import { NETWORK_CONFIG, type NetworkKey } from "@/lib/networkConfig";
+import { BenchmarkDashboard } from "@/components/charts/BenchmarkDashboard";
 import { type FileNode } from "@/lib/sample-contracts";
+import {
+  discoverWorkspaceTests,
+  hasRootTestsDirectory,
+  listIntegrationTargets,
+} from "@/lib/integrationTestDiscovery";
+import { instantiateContract } from "@/lib/contractInstantiator";
 import { useDeployedContractsStore } from "@/store/useDeployedContractsStore";
+import { useDeploymentStore } from "@/store/useDeploymentStore";
 import { useDiagnosticsStore } from "@/store/useDiagnosticsStore";
 import { useIdentityStore } from "@/store/useIdentityStore";
-import { useWorkspaceStore } from "@/store/workspaceStore";
+import { useWorkspaceStore, flattenWorkspaceFiles } from "@/store/workspaceStore";
+import { useSharedEnvironmentStore } from "@/store/useSharedEnvironmentStore";
+import { useAuditLogStore } from "@/store/useAuditLogStore";
+import { AuditLogView } from "@/components/ide/AuditLogView";
+import { useVCSStore } from "@/store/vcsStore";
+import { useErrorHelpStore } from "@/store/useErrorHelpStore";
+import ErrorHelpPanel from "@/components/ide/ErrorHelpPanel";
+import { useCloudSyncStore } from "@/store/useCloudSyncStore";
+import { ConflictModal } from "@/components/cloud/ConflictModal";
+import { useAuth } from "@/hooks/useAuth";
+import { useNotificationStore } from "@/store/useNotificationStore";
+import { useTransactionResultsStore } from "@/store/useTransactionResultsStore";
+import {
+  createWorkspaceSnapshot,
+  tutorialEngine,
+} from "@/lib/tutorials/tutorialEngine";
+import { usePostBuildHooksStore } from "@/store/usePostBuildHooksStore";
+import { runPostBuildHooks } from "@/lib/postBuildHookRunner";
 import { parseCargoAuditOutput } from "@/utils/cargoAuditParser";
 import { parseMixedOutput } from "@/utils/cargoParser";
 import { parseClippyOutput, type ClippyLint } from "@/utils/clippyParser";
-import { createStreamProcessor, readCompileResponse } from "@/utils/compileStream";
+import { decodeScValBase64 } from "@/utils/scValDecoder";
+import {
+  createStreamProcessor,
+  readCompileResponse,
+} from "@/utils/compileStream";
+import { useTranslation } from "react-i18next";
+import {
+  createStructuredTestOutputFromCargoRun,
+  createSimulatedCargoTestOutput,
+  formatTestRunForTerminal,
+  parseStructuredTestOutput,
+  resolveWorkspacePathForTrace,
+  toRevealRange,
+  type TestRunResult,
+} from "@/lib/testResults";
 
-const COMPILE_API_URL = process.env.NEXT_PUBLIC_COMPILE_API_URL ?? "/api/compile";
+const COMPILE_API_URL =
+  process.env.NEXT_PUBLIC_COMPILE_API_URL ?? "/api/compile";
+
+const createTxHash = () =>
+  crypto.randomUUID().replace(/-/g, "").slice(0, 64).toUpperCase();
 
 const toCompilePath = (pathParts: string[]) => {
   if (pathParts.length === 2 && pathParts[1].endsWith(".rs")) {
@@ -80,7 +151,8 @@ const replaceByLineColumn = (
   const startLineIndex = Math.max(0, startLine - 1);
   const endLineIndex = Math.max(0, endLine - 1);
 
-  const prefix = lines[startLineIndex]?.slice(0, Math.max(0, startCol - 1)) ?? "";
+  const prefix =
+    lines[startLineIndex]?.slice(0, Math.max(0, startCol - 1)) ?? "";
   const suffix = lines[endLineIndex]?.slice(Math.max(0, endCol - 1)) ?? "";
 
   const before = lines.slice(0, startLineIndex).join("\n");
@@ -98,7 +170,40 @@ const formatRunTime = () =>
     second: "2-digit",
   });
 
+
+function TestingSidebar() {
+  const { t } = useTranslation();
+  const [tab, setTab] = useState<"snippets" | "templates" | "generate">("snippets");
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex shrink-0 border-b border-sidebar-border">
+        {(["snippets", "templates", "generate"] as const).map((tValue) => (
+          <button
+            key={tValue}
+            type="button"
+            onClick={() => setTab(t)}
+            className={`flex-1 border-b-2 py-1.5 font-mono text-[10px] uppercase tracking-wider transition-colors ${
+              tab === t
+                ? "border-primary text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {tValue === "snippets" ? "Snippets" : tValue === "templates" ? "Templates" : "Generate"}
+          </button>
+        ))}
+      </div>
+      <div className="min-h-0 flex-1 overflow-hidden">
+        {tab === "snippets" && <TestingView />}
+        {tab === "templates" && <TemplatesView />}
+        {tab === "generate" && <GeneratePropertyTest />}
+      </div>
+    </div>
+  );
+}
+
 export default function Index() {
+  const { t } = useTranslation();
   const {
     files,
     activeTabPath,
@@ -109,6 +214,7 @@ export default function Index() {
     showExplorer,
     showPanel,
     leftSidebarTab,
+    hydrationComplete,
     setIsCompiling,
     setBuildState,
     setContractId,
@@ -121,30 +227,140 @@ export default function Index() {
     updateFileContent,
     addTab,
     setActiveTabPath,
+    mockLedgerState,
+    diffViewPath,
+    setDiffViewPath,
+    setTerminalOutput,
   } = useWorkspaceStore();
 
+  useTerminalBridge();
+
   const { activeContext, activeIdentity, loadIdentities } = useIdentityStore();
+  const { localRepoInitialized, hydrateLocalRepo, refreshLocalStatuses } =
+    useVCSStore();
+  const sharedEnvConfig = useSharedEnvironmentStore((s) => s.config);
+  const { addLog: addAuditLog } = useAuditLogStore();
+  const { user, isAuthenticated } = useAuth();
+  const auditUser = user?.name ?? user?.email ?? "Guest";
   const { setDiagnostics, clearDiagnostics } = useDiagnosticsStore();
   const { addContract } = useDeployedContractsStore();
+  const { isOpen: isErrorHelpOpen, errorCode, closeErrorHelp } = useErrorHelpStore();
+  const { scheduleAutoSave, syncStatus, conflictData } = useCloudSyncStore();
+  const {
+    isDeployModalOpen,
+    deploymentStep,
+    deploymentError,
+    pendingWasmHash,
+    openDeployModal,
+    setDeploymentStep,
+    setDeploymentError,
+    setPendingWasmHash,
+    resetDeployment,
+  } = useDeploymentStore();
+
+  const [deployedContractId, setDeployedContractId] = useState<string | null>(null);
+  const [bottomTab, setBottomTab] = useState<"console" | "events" | "proptest">(
+    "console",
+  );
+  const [wizardOpen, setWizardOpen] = useState(false);
+
+  useEffect(() => {
+    if (files.length === 0) {
+      setWizardOpen(true);
+    }
+  }, [files.length]);
+
+  useEffect(() => {
+    if (!hydrationComplete) return;
+    if (!sharedEnvConfig.enabled) return;
+    if (sharedEnvConfig.network) setNetwork(sharedEnvConfig.network);
+  }, [hydrationComplete, sharedEnvConfig.enabled, sharedEnvConfig.network, setNetwork]);
 
   const [invokeState, setInvokeState] = useState<{
     phase: "idle" | "preparing" | "success" | "failed";
     message: string;
   }>({ phase: "idle", message: "Invoke" });
 
+  const appendResultLog = useTransactionResultsStore((state) => state.appendLog);
+  const postBuildHooks = usePostBuildHooksStore((state) => state.hooks);
+
   const [clippyLints, setClippyLints] = useState<ClippyLint[]>([]);
   const [isRunningClippy, setIsRunningClippy] = useState(false);
   const [clippyError, setClippyError] = useState<string | null>(null);
   const [lastClippyRunAt, setLastClippyRunAt] = useState<string | null>(null);
 
-  const [auditFindings, setAuditFindings] = useState<ReturnType<typeof parseCargoAuditOutput>["findings"]>([]);
+  const [auditFindings, setAuditFindings] = useState<
+    ReturnType<typeof parseCargoAuditOutput>["findings"]
+  >([]);
   const [isRunningAudit, setIsRunningAudit] = useState(false);
   const [auditError, setAuditError] = useState<string | null>(null);
   const [lastAuditRunAt, setLastAuditRunAt] = useState<string | null>(null);
+  const [testRun, setTestRun] = useState<TestRunResult | null>(null);
 
   useEffect(() => {
     loadIdentities();
   }, [loadIdentities]);
+
+  useEffect(() => {
+    useNotificationStore.getState().addNotification({
+      message: "IDE Loaded Successfully 🚀",
+      type: "success",
+    });
+  }, []);
+
+  useProptestOutputWatcher();
+
+  useEffect(() => {
+    if (!hydrationComplete) {
+      return;
+    }
+
+    void hydrateLocalRepo(flattenWorkspaceFiles(files));
+  }, [files, hydrateLocalRepo, hydrationComplete]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !user || !hydrationComplete) return;
+    const userId = user.id ?? user.email ?? "anon";
+    scheduleAutoSave(userId, flattenWorkspaceFiles(files), network);
+  }, [files, isAuthenticated, user, network, hydrationComplete, scheduleAutoSave]);
+
+  useEffect(() => {
+    if (!hydrationComplete || !localRepoInitialized) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void refreshLocalStatuses(
+        flattenWorkspaceFiles(useWorkspaceStore.getState().files),
+      );
+    }, 5000);
+
+    return () => window.clearInterval(intervalId);
+  }, [hydrationComplete, localRepoInitialized, refreshLocalStatuses]);
+
+  useEffect(() => {
+    const handleRefTab = () => {
+      setLeftSidebarTab("references");
+      setShowExplorer(true);
+    };
+
+    const handleCommentsPane = () => {
+      setLeftSidebarTab("comments");
+      setShowExplorer(true);
+    };
+    const handleTutorialsPane = () => {
+      setLeftSidebarTab("tutorials");
+      setShowExplorer(true);
+    };
+    window.addEventListener("referencesFound", handleRefTab);
+    window.addEventListener("comments:open-pane", handleCommentsPane);
+    window.addEventListener("tutorials:open-pane", handleTutorialsPane);
+    return () => {
+      window.removeEventListener("referencesFound", handleRefTab);
+      window.removeEventListener("comments:open-pane", handleCommentsPane);
+      window.removeEventListener("tutorials:open-pane", handleTutorialsPane);
+    };
+  }, [setLeftSidebarTab, setShowExplorer]);
 
   const contractName = useMemo(
     () => activeTabPath[0] ?? files[0]?.name ?? "hello_world",
@@ -162,14 +378,21 @@ export default function Index() {
   );
 
   const handleCompile = useCallback(async () => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      toast.error(t('network.offline_warning', 'Cannot perform network actions while offline.'));
+      return;
+    }
+
     setIsCompiling(true);
     setBuildState("building");
     clearDiagnostics();
     setTerminalExpanded(true);
-    appendTerminalOutput("> Compiling contract...\r\n");
+    appendTerminalOutput(`> ${t('network.build', 'Compiling contract')}...\r\n`);
     appendTerminalOutput(`Target network: ${network}\r\n`);
 
-    const processor = createStreamProcessor({ onTerminalData: appendTerminalOutput });
+    const processor = createStreamProcessor({
+      onTerminalData: appendTerminalOutput,
+    });
 
     try {
       const response = await fetch(COMPILE_API_URL, {
@@ -183,29 +406,59 @@ export default function Index() {
       setDiagnostics(diagnostics);
 
       if (!response.ok) {
-        throw new Error(output.trim() || `Build request failed with status ${response.status}`);
+        throw new Error(
+          output.trim() || `Build request failed with status ${response.status}`,
+        );
       }
 
-      appendTerminalOutput("✓ Compilation finished.\r\n");
+      appendTerminalOutput(`✓ ${t('general.success', 'Compilation finished')}.\r\n`);
       setBuildState("success");
+      addAuditLog({
+        category: "build",
+        action: "Contract Build",
+        status: "success",
+        user: auditUser,
+        params: { contractName, network },
+        details: "Contract compiled successfully",
+        rawJson: { contractName, network, timestamp: new Date().toISOString() },
+      });
+      await runPostBuildHooks(postBuildHooks, appendTerminalOutput);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Build failed";
       appendTerminalOutput(`Build failed: ${message}\r\n`);
       setBuildState("error");
+      addAuditLog({
+        category: "build",
+        action: "Contract Build",
+        status: "failure",
+        user: auditUser,
+        params: { contractName, network },
+        details: message,
+        rawJson: {
+          contractName,
+          network,
+          error: message,
+          timestamp: new Date().toISOString(),
+        },
+      });
     } finally {
       setIsCompiling(false);
       setTimeout(() => setBuildState("idle"), 1000);
     }
   }, [
+    addAuditLog,
     appendTerminalOutput,
+    auditUser,
     clearDiagnostics,
     compilePayload,
     contractName,
     network,
+    postBuildHooks,
     setBuildState,
     setDiagnostics,
     setIsCompiling,
     setTerminalExpanded,
+    t,
   ]);
 
   const handleRunClippy = useCallback(async () => {
@@ -243,24 +496,30 @@ export default function Index() {
       setLastClippyRunAt(formatRunTime());
 
       if (!response.ok || payload.error) {
-        const message = payload.error || `Clippy request failed (status ${response.status})`;
+        const message =
+          payload.error || `Clippy request failed (status ${response.status})`;
         setClippyError(message);
       }
 
-      appendTerminalOutput(
-        `${output || "No Clippy output returned."}\r\n`,
-      );
+      appendTerminalOutput(`${output || "No Clippy output returned."}\r\n`);
       appendTerminalOutput(
         `Clippy finished with ${parsedClippy.lints.length} lint(s).\r\n`,
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Clippy request failed";
+      const message =
+        error instanceof Error ? error.message : "Clippy request failed";
       setClippyError(message);
       appendTerminalOutput(`Clippy failed: ${message}\r\n`);
     } finally {
       setIsRunningClippy(false);
     }
-  }, [appendTerminalOutput, compilePayload.files, contractName, setDiagnostics, setTerminalExpanded]);
+  }, [
+    appendTerminalOutput,
+    compilePayload.files,
+    contractName,
+    setDiagnostics,
+    setTerminalExpanded,
+  ]);
 
   const handleRunAudit = useCallback(async () => {
     setIsRunningAudit(true);
@@ -288,7 +547,7 @@ export default function Index() {
 
       const rawOutput = payload.stdout?.trim().length
         ? payload.stdout
-        : payload.stderr ?? "";
+        : (payload.stderr ?? "");
 
       const parsedAudit = parseCargoAuditOutput(rawOutput);
       setAuditFindings(parsedAudit.findings);
@@ -310,13 +569,19 @@ export default function Index() {
         `Audit finished with ${parsedAudit.findings.length} vulnerability finding(s).\r\n`,
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Audit request failed";
+      const message =
+        error instanceof Error ? error.message : "Audit request failed";
       setAuditError(message);
       appendTerminalOutput(`Audit failed: ${message}\r\n`);
     } finally {
       setIsRunningAudit(false);
     }
-  }, [appendTerminalOutput, compilePayload.files, contractName, setTerminalExpanded]);
+  }, [
+    appendTerminalOutput,
+    compilePayload.files,
+    contractName,
+    setTerminalExpanded,
+  ]);
 
   const handleApplyClippyFix = useCallback(
     (lint: ClippyLint) => {
@@ -328,7 +593,9 @@ export default function Index() {
       const file = findNode(files, filePath);
 
       if (!file || file.type !== "file") {
-        setClippyError(`Unable to apply fix: file '${lint.autoFix.fileId}' not found.`);
+        setClippyError(
+          `Unable to apply fix: file '${lint.autoFix.fileId}' not found.`,
+        );
         return;
       }
 
@@ -349,29 +616,378 @@ export default function Index() {
     [appendTerminalOutput, files, updateFileContent],
   );
 
-  const handleDeploy = useCallback(() => {
-    setTerminalExpanded(true);
-    appendTerminalOutput(`Deploying to ${network}...\r\n`);
+  const runInstantiate = useCallback(
+    async (wasmHash: string) => {
+      const rpcUrl =
+        network === "local"
+          ? useWorkspaceStore.getState().customRpcUrl
+          : NETWORK_CONFIG[network as NetworkKey]?.horizon ??
+            "https://soroban-testnet.stellar.org:443";
+      const networkPassphrase =
+        NETWORK_CONFIG[network as NetworkKey]?.passphrase ??
+        "Test SDF Network ; September 2015";
 
-    setTimeout(() => {
-      const fullId =
-        `CD${Math.random().toString(36).substring(2, 15)}${Math.random().toString(36).substring(2, 15)}${Math.random().toString(36).substring(2, 15)}${Math.random().toString(36).substring(2, 15)}`
-          .substring(0, 56)
-          .toUpperCase();
-      setContractId(fullId);
-      addContract(fullId, network, contractName);
-      appendTerminalOutput(`✓ Contract deployed! ID: ${fullId}\r\n`);
-    }, 1200);
-  }, [addContract, appendTerminalOutput, contractName, network, setContractId, setTerminalExpanded]);
+      setDeploymentStep("instantiating");
+      appendTerminalOutput("> Instantiating contract from WASM hash…\r\n");
+
+      const { contractId: newContractId, transactionHash } =
+        await instantiateContract({
+          wasmHash,
+          rpcUrl,
+          networkPassphrase,
+          activeContext,
+          activeIdentity,
+          webWalletPublicKey: null,
+          walletType: null,
+          onStatus: (s) => {
+            appendTerminalOutput(`  [instantiate] ${s.message}\r\n`);
+          },
+        });
+
+      setContractId(newContractId);
+      setDeployedContractId(newContractId);
+      addContract(newContractId, network as NetworkKey, contractName);
+      setPendingWasmHash(null);
+
+      appendTerminalOutput(`✓ Contract instantiated! ID: ${newContractId}\r\n`);
+      appendTerminalOutput(`  Transaction: ${transactionHash}\r\n`);
+
+      addAuditLog({
+        category: "deploy",
+        action: "Contract Deploy",
+        status: "success",
+        user: auditUser,
+        params: {
+          contractId: newContractId,
+          contractName,
+          network,
+          wasmHash,
+          transactionHash,
+        },
+        details: `Deployed to ${network} — ID: ${newContractId}`,
+        rawJson: {
+          contractId: newContractId,
+          contractName,
+          network,
+          wasmHash,
+          transactionHash,
+          timestamp: new Date().toISOString(),
+        },
+      });
+
+      setDeploymentStep("success");
+      toast.success(`Contract deployed: ${newContractId.substring(0, 8)}…`);
+    },
+    [
+      activeContext,
+      activeIdentity,
+      addAuditLog,
+      addContract,
+      appendTerminalOutput,
+      auditUser,
+      contractName,
+      network,
+      setContractId,
+      setDeploymentStep,
+      setPendingWasmHash,
+    ],
+  );
+
+  const handleDeploy = useCallback(async () => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      toast.error(t('network.offline_warning', 'Cannot perform network actions while offline.'));
+      return;
+    }
+
+    setDeployedContractId(null);
+    openDeployModal();
+    setDeploymentStep("simulating");
+    setDeploymentError(null);
+    setPendingWasmHash(null);
+    setTerminalExpanded(true);
+    appendTerminalOutput(`> Deploying to ${network}…\r\n`);
+
+    try {
+      setDeploymentStep("uploading");
+      appendTerminalOutput(`> ${t('network.deploy', 'Compiling and uploading WASM')}…\r\n`);
+
+      const response = await fetch(COMPILE_API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(compilePayload),
+      });
+
+      const processor = createStreamProcessor({ onTerminalData: appendTerminalOutput });
+      const output = await readCompileResponse(response, processor);
+
+      if (!response.ok) {
+        throw new Error(output.trim() || `Build failed with status ${response.status}`);
+      }
+
+      let wasmHash: string | null = null;
+
+      try {
+        const parsed = JSON.parse(output) as { contractHash?: string | null };
+        wasmHash = parsed.contractHash ?? null;
+      } catch {
+        const match = output.match(/contract[_\s]?hash[:\s]+([a-f0-9]{64})/i);
+        wasmHash = match?.[1] ?? null;
+      }
+
+      if (!wasmHash) {
+        throw new Error(
+          "WASM uploaded but no contract hash was returned. Cannot proceed to instantiation.",
+        );
+      }
+
+      appendTerminalOutput(`✓ WASM uploaded. Hash: ${wasmHash}\r\n`);
+      setPendingWasmHash(wasmHash);
+
+      await runInstantiate(wasmHash);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Deployment failed";
+      setDeploymentStep("error");
+      setDeploymentError(message);
+      appendTerminalOutput(`✗ Deployment failed: ${message}\r\n`);
+      toast.error(message);
+      addAuditLog({
+        category: "deploy",
+        action: "Contract Deploy",
+        status: "failure",
+        user: auditUser,
+        params: { contractName, network },
+        details: message,
+        rawJson: {
+          contractName,
+          network,
+          error: message,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+  }, [
+    addAuditLog,
+    appendTerminalOutput,
+    auditUser,
+    compilePayload,
+    contractName,
+    network,
+    openDeployModal,
+    runInstantiate,
+    setDeploymentError,
+    setDeploymentStep,
+    setPendingWasmHash,
+    setTerminalExpanded,
+  ]);
 
   const handleTest = useCallback(() => {
-    setTerminalExpanded(true);
-    appendTerminalOutput("Running tests...\r\n");
-    setTimeout(() => {
-      appendTerminalOutput("✓ test_hello ... ok\r\n");
-      appendTerminalOutput("test result: ok. 1 passed; 0 failed;\r\n");
-    }, 900);
-  }, [appendTerminalOutput, setTerminalExpanded]);
+    void (async () => {
+      setTerminalExpanded(true);
+
+      if (mockLedgerState.entries.length > 0) {
+        appendTerminalOutput(
+          `Injecting ${mockLedgerState.entries.length} mock ledger ${
+            mockLedgerState.entries.length === 1 ? "entry" : "entries"
+          } via --ledger-snapshot...\r\n`,
+        );
+        appendTerminalOutput(`Mock state: ${JSON.stringify(mockLedgerState)}\r\n`);
+      }
+
+      const discoveredTests = discoverWorkspaceTests(files, contractName);
+      const integrationTargets = listIntegrationTargets(discoveredTests);
+      const hasRootTests = hasRootTestsDirectory(files, contractName);
+
+      if (discoveredTests.length === 0) {
+        appendTerminalOutput("No Rust tests discovered for the active contract.\r\n");
+        return;
+      }
+
+      appendTerminalOutput(
+        `Detected ${discoveredTests.length} test(s): ${
+          discoveredTests.filter((test) => test.testType === "integration").length
+        } integration, ${
+          discoveredTests.filter((test) => test.testType === "unit").length
+        } unit.\r\n`,
+      );
+
+      if (hasRootTests) {
+        appendTerminalOutput(
+          "Integration tests folder detected at contract root: tests/.\r\n",
+        );
+      }
+
+      try {
+        const response = await fetch("/api/run-test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contractName,
+            files: compilePayload.files,
+            mode: "full",
+            integrationTargets,
+          }),
+        });
+
+        const payload = (await response.json()) as {
+          success: boolean;
+          mode?: "full" | "failed-only";
+          command?: string;
+          stdout?: string;
+          stderr?: string;
+          outcomes?: Record<string, "passed" | "failed">;
+          error?: string;
+        };
+
+        if (!response.ok || payload.error) {
+          throw new Error(payload.error || `Run test request failed (status ${response.status})`);
+        }
+
+        const rawOutput = createStructuredTestOutputFromCargoRun(
+          payload,
+          discoveredTests.map((test) => ({
+            id: test.id,
+            suite: test.contractName,
+            name: test.testName,
+            testType: test.testType,
+            rerunCommand: `cargo test ${test.testName} -- --exact`,
+          })),
+        );
+
+        const nextRun = parseStructuredTestOutput(rawOutput);
+        setTestRun(nextRun);
+        setTerminalOutput(formatTestRunForTerminal(nextRun));
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Run test request failed";
+        appendTerminalOutput(`Falling back to simulated tests: ${message}\r\n`);
+        const rawOutput = createSimulatedCargoTestOutput({ files, activeTabPath });
+        const nextRun = parseStructuredTestOutput(rawOutput);
+        setTestRun(nextRun);
+        setTerminalOutput(formatTestRunForTerminal(nextRun));
+      }
+    })();
+  }, [
+    activeTabPath,
+    appendTerminalOutput,
+    compilePayload.files,
+    contractName,
+    files,
+    mockLedgerState,
+    setTerminalExpanded,
+    setTerminalOutput,
+  ]);
+
+  const handleRerunFailedTests = useCallback(() => {
+    void (async () => {
+      const failedTestNames =
+        testRun?.cases
+          .filter((testCase) => testCase.status === "failed")
+          .map((testCase) => testCase.name) ?? [];
+
+      if (failedTestNames.length === 0) {
+        return;
+      }
+
+      const discoveredTests = discoverWorkspaceTests(files, contractName);
+      const integrationTargets = listIntegrationTargets(discoveredTests);
+
+      try {
+        const response = await fetch("/api/run-test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contractName,
+            files: compilePayload.files,
+            mode: "failed-only",
+            failedTestNames,
+            integrationTargets,
+          }),
+        });
+
+        const payload = (await response.json()) as {
+          success: boolean;
+          mode?: "full" | "failed-only";
+          command?: string;
+          stdout?: string;
+          stderr?: string;
+          outcomes?: Record<string, "passed" | "failed">;
+          error?: string;
+        };
+
+        if (!response.ok || payload.error) {
+          throw new Error(payload.error || `Run test request failed (status ${response.status})`);
+        }
+
+        const selectedTests = discoveredTests.filter((test) =>
+          failedTestNames.includes(test.testName),
+        );
+
+        const rawOutput = createStructuredTestOutputFromCargoRun(
+          payload,
+          selectedTests.map((test) => ({
+            id: test.id,
+            suite: test.contractName,
+            name: test.testName,
+            testType: test.testType,
+            rerunCommand: `cargo test ${test.testName} -- --exact`,
+          })),
+        );
+
+        const nextRun = parseStructuredTestOutput(rawOutput);
+        setTestRun(nextRun);
+        setTerminalExpanded(true);
+        setTerminalOutput(formatTestRunForTerminal(nextRun));
+      } catch {
+        const rawOutput = createSimulatedCargoTestOutput({
+          files,
+          activeTabPath,
+          previousRun: testRun,
+          rerunFailedOnly: true,
+        });
+        const nextRun = parseStructuredTestOutput(rawOutput);
+        setTestRun(nextRun);
+        setTerminalExpanded(true);
+        setTerminalOutput(formatTestRunForTerminal(nextRun));
+      }
+    })();
+  }, [
+    activeTabPath,
+    compilePayload.files,
+    contractName,
+    files,
+    setTerminalExpanded,
+    setTerminalOutput,
+    testRun,
+  ]);
+
+  const handleOpenTestTrace = useCallback(
+    (traceFile: string, line: number, column = 1) => {
+      const pathParts = resolveWorkspacePathForTrace(traceFile, files);
+
+      if (!pathParts) {
+        appendTerminalOutput(`Unable to resolve ${traceFile}:${line}:${column}\r\n`);
+        return;
+      }
+
+      addTab(pathParts, pathParts[pathParts.length - 1]);
+      setActiveTabPath(pathParts);
+      window.dispatchEvent(
+        new CustomEvent("ide:reveal-range", {
+          detail: {
+            fileId: pathParts.join("/"),
+            pathParts,
+            range: toRevealRange(line, column),
+          },
+        }),
+      );
+    },
+    [addTab, appendTerminalOutput, files, setActiveTabPath],
+  );
+
+  const handleClearTerminal = useCallback(() => {
+    setTerminalOutput("");
+    setTestRun(null);
+  }, [setTerminalOutput]);
 
   const handleInvoke = useCallback(
     async (fn: string, args: string) => {
@@ -380,24 +996,81 @@ export default function Index() {
         return;
       }
 
+      const start = performance.now();
+      const timestamp = new Date().toISOString();
       setTerminalExpanded(true);
       const signer =
         activeContext?.type === "web-wallet"
           ? "browser-wallet"
-          : activeIdentity?.nickname ?? "anonymous";
+          : (activeIdentity?.nickname ?? "anonymous");
 
       appendTerminalOutput(`Invoking ${fn}(${args}) as ${signer}...\r\n`);
       setInvokeState({ phase: "preparing", message: "Preparing..." });
 
-      setTimeout(() => {
-        appendTerminalOutput('Result: ["ok"]\r\n');
+      try {
+        // Simulated invocation response — replace with real pipeline when available.
+        const simulatedScVal = nativeToScVal(["Hello", "Dev"]);
+        const resultScValBase64 = simulatedScVal.toXDR("base64");
+        const { value, error } = decodeScValBase64(resultScValBase64);
+        const txHash = createTxHash();
+
+        appendTerminalOutput(
+          `Result: ${JSON.stringify(value ?? ["Hello", "Dev"])}\r\n`,
+        );
+        appendTerminalOutput(`Tx: ${txHash}\r\n`);
+
+        appendResultLog({
+          id: crypto.randomUUID(),
+          timestamp,
+          network: network as NetworkKey,
+          contractId,
+          fnName: fn,
+          argsJson: args,
+          status: "success",
+          txHash,
+          resultScValBase64,
+          decodedResult: value ?? null,
+          errorMessage: error ?? null,
+          durationMs: Math.round(performance.now() - start),
+          source: "simulate",
+        });
+
         setInvokeState({ phase: "success", message: "Confirmed" });
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Invocation failed";
+        appendTerminalOutput(`Invoke failed: ${message}\r\n`);
+        appendResultLog({
+          id: crypto.randomUUID(),
+          timestamp,
+          network: network as NetworkKey,
+          contractId,
+          fnName: fn,
+          argsJson: args,
+          status: "error",
+          txHash: null,
+          resultScValBase64: null,
+          decodedResult: null,
+          errorMessage: message,
+          durationMs: Math.round(performance.now() - start),
+          source: "simulate",
+        });
+        setInvokeState({ phase: "failed", message: "Failed" });
+      } finally {
         setTimeout(() => {
           setInvokeState({ phase: "idle", message: "Invoke" });
         }, 1500);
-      }, 900);
+      }
     },
-    [activeContext, activeIdentity, appendTerminalOutput, contractId, setTerminalExpanded],
+    [
+      activeContext,
+      activeIdentity,
+      appendResultLog,
+      appendTerminalOutput,
+      contractId,
+      network,
+      setTerminalExpanded,
+    ],
   );
 
   const activeFileContext = useMemo(() => {
@@ -417,7 +1090,9 @@ export default function Index() {
     <div className="flex h-screen flex-col overflow-hidden">
       <Toolbar
         onCompile={handleCompile}
-        onDeploy={handleDeploy}
+        onDeploy={() => {
+          void handleDeploy();
+        }}
         onTest={handleTest}
         isCompiling={isCompiling}
         buildState={buildState}
@@ -460,47 +1135,147 @@ export default function Index() {
                 }}
               />
             ) : null}
-            {leftSidebarTab === "identities" ? <IdentitiesView network={network} /> : null}
-            {leftSidebarTab === "search" ? (
-              <SearchPane
-                onResultSelect={(pathParts, _range) => {
-                  addTab(pathParts, pathParts[pathParts.length - 1]);
-                  setActiveTabPath(pathParts);
-                }}
-              />
+            {leftSidebarTab === "identities" ? (
+              <IdentitiesView network={network} />
             ) : null}
+            {leftSidebarTab === "search" ? <GlobalSearch /> : null}
+            {leftSidebarTab === "outline" ? <OutlineView /> : null}
             {leftSidebarTab === "security" ? (
-              <SecurityView
-                clippyLints={clippyLints}
-                clippyRunning={isRunningClippy}
-                clippyError={clippyError}
-                onRunClippy={handleRunClippy}
-                onApplyClippyFix={handleApplyClippyFix}
-                auditFindings={auditFindings}
-                auditRunning={isRunningAudit}
-                auditError={auditError}
-                onRunAudit={handleRunAudit}
-                lastClippyRunAt={lastClippyRunAt}
-                lastAuditRunAt={lastAuditRunAt}
-              />
+              <div className="h-full overflow-y-auto">
+                <SecurityView
+                  clippyLints={clippyLints}
+                  clippyRunning={isRunningClippy}
+                  clippyError={clippyError}
+                  onRunClippy={handleRunClippy}
+                  onApplyClippyFix={handleApplyClippyFix}
+                  auditFindings={auditFindings}
+                  auditRunning={isRunningAudit}
+                  auditError={auditError}
+                  onRunAudit={handleRunAudit}
+                  lastClippyRunAt={lastClippyRunAt}
+                  lastAuditRunAt={lastAuditRunAt}
+                />
+                <div className="border-t border-border">
+                  <XdrInspector />
+                </div>
+              </div>
             ) : null}
+            {leftSidebarTab === "tests" ? <TestingSidebar /> : null}
+            {leftSidebarTab === "fuzzing" ? <FuzzingPanel /> : null}
+            {leftSidebarTab === "git" ? <GitPane /> : null}
+            {leftSidebarTab === "comments" ? <CommentsPane /> : null}
+            {leftSidebarTab === "references" ? <ReferencesPane /> : null}
+            {leftSidebarTab === "binary-diff" ? (
+              <div className="flex h-full flex-col space-y-4 bg-sidebar p-4">
+                <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-primary">
+                  <Binary className="h-4 w-4" />
+                  <span>Binary Auditing</span>
+                </div>
+                <p className="text-[11px] italic leading-relaxed text-muted-foreground">
+                  Compare compiled WASM binaries side-by-side to audit changes in
+                  public symbols and byte-level logic.
+                </p>
+                <div className="rounded-lg border border-border bg-muted/50 p-3">
+                  <h4 className="mb-1.5 flex items-center gap-1.5 text-[10px] font-bold uppercase">
+                    <Activity className="h-3 w-3" /> Quick Tip
+                  </h4>
+                  <p className="text-[10px] text-muted-foreground">
+                    Select two builds in the main area to analyze the delta
+                    between them.
+                  </p>
+                </div>
+              </div>
+            ) : null}
+            {leftSidebarTab === "inspector" ? <InspectorPane /> : null}
+            {leftSidebarTab === "benchmarks" ? <BenchmarkDashboard /> : null}
+            {leftSidebarTab === "multisig" ? <MultisigView network={network} /> : null}
+            {leftSidebarTab === "liquidity" ? (
+              <LiquidityPoolSimulator />
+            ) : null}
+            {leftSidebarTab === "audit" ? <AuditLogView /> : null}
+            {leftSidebarTab === "assets" ? <AssetManager /> : null}
+            {leftSidebarTab === "tutorials" ? <TutorialsPane /> : null}
           </aside>
         ) : null}
 
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          <EditorTabs />
           <div className="min-h-0 flex-1 overflow-hidden">
-            <CodeEditor />
+            {leftSidebarTab === "binary-diff" ? (
+              <BinaryDiffTool />
+            ) : diffViewPath ? (
+              <DiffEditorPane
+                path={diffViewPath}
+                currentContent={activeFileContext?.content ?? ""}
+                language={activeFileContext?.language ?? "text"}
+              />
+            ) : (
+              <CodeEditor />
+            )}
           </div>
-          <div className="h-56 shrink-0 border-t border-border">
-            <Terminal />
+
+          <div className="flex h-56 shrink-0 flex-col border-t border-border">
+            <div
+              className="flex shrink-0 items-center border-b border-border bg-secondary"
+              role="tablist"
+              aria-label="Bottom panel tabs"
+            >
+              {(
+                [
+                  { id: "console", label: "Console" },
+                  { id: "events", label: "Events" },
+                  { id: "proptest", label: "Proptest" },
+                ] as const
+              ).map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={bottomTab === tab.id}
+                  onClick={() => setBottomTab(tab.id)}
+                  className={`border-b-2 px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider transition-colors ${
+                    bottomTab === tab.id
+                      ? "border-primary text-foreground"
+                      : "border-transparent text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-hidden">
+              {bottomTab === "console" && (
+                <Terminal
+                  onClear={handleClearTerminal}
+                  supplementaryContent={
+                    <TestResultsLog
+                      result={testRun}
+                      onOpenTrace={handleOpenTestTrace}
+                      onRerunFailed={handleRerunFailedTests}
+                    />
+                  }
+                />
+              )}
+              {bottomTab === "events" && <EventsPane />}
+              {bottomTab === "proptest" && <ProptestView />}
+            </div>
           </div>
         </main>
 
         <aside className="hidden md:flex">
+          {isErrorHelpOpen && errorCode ? (
+            <div className="w-96 shrink-0">
+              <ErrorHelpPanel errorCode={errorCode} onClose={closeErrorHelp} />
+            </div>
+          ) : null}
+
           {showPanel ? (
             <div className="w-80 border-l border-border bg-card">
-              <ContractPanel contractId={contractId} onInvoke={handleInvoke} invokeState={invokeState} />
+              <ContractPanel
+                contractId={contractId}
+                onInvoke={handleInvoke}
+                invokeState={invokeState}
+              />
             </div>
           ) : null}
 
@@ -511,15 +1286,40 @@ export default function Index() {
               title="Toggle Panel"
               aria-label="Toggle panel"
             >
-              {showPanel ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
+              {showPanel ? (
+                <PanelRightClose className="h-4 w-4" />
+              ) : (
+                <PanelRightOpen className="h-4 w-4" />
+              )}
             </button>
           </div>
         </aside>
       </div>
 
-      <div className="hidden md:block">
-        <StatusBar language={activeFileContext?.language} />
-      </div>
+      <StatusBar language={activeFileContext?.language} />
+
+      <StarterProjectWizard open={wizardOpen} onOpenChange={setWizardOpen} />
+
+      {syncStatus === "conflict" && conflictData && (
+        <ConflictModal conflictData={conflictData} />
+      )}
+
+      <DeploymentStepper
+        open={isDeployModalOpen}
+        step={deploymentStep}
+        error={deploymentError}
+        contractId={deployedContractId}
+        pendingWasmHash={pendingWasmHash}
+        onClose={resetDeployment}
+        onRetryInstantiate={
+          pendingWasmHash
+            ? () => {
+                setDeploymentError(null);
+                void runInstantiate(pendingWasmHash);
+              }
+            : undefined
+        }
+      />
     </div>
   );
 }

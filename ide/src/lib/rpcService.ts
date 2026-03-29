@@ -1,4 +1,6 @@
 import { ErrorTranslator, type TranslatedError } from "./errorTranslator";
+import type { NetworkKey } from "./networkConfig";
+import { fetchWithRpcFailover } from "./rpcFailover";
 
 export interface SimulationResult {
   success: boolean;
@@ -18,13 +20,40 @@ export interface CustomHeaders {
   [key: string]: string;
 }
 
+const normalizeResourceUsage = (value: unknown): SimulationResult["resourceUsage"] => {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const input = value as {
+    cpuInstructions?: unknown;
+    cpu_instructions?: unknown;
+    memoryBytes?: unknown;
+    memory_bytes?: unknown;
+    minResourceFee?: unknown;
+    min_resource_fee?: unknown;
+  };
+
+  const cpuCandidate = input.cpuInstructions ?? input.cpu_instructions;
+  const memoryCandidate = input.memoryBytes ?? input.memory_bytes;
+  const feeCandidate = input.minResourceFee ?? input.min_resource_fee;
+
+  return {
+    cpuInstructions: typeof cpuCandidate === "number" ? cpuCandidate : undefined,
+    memoryBytes: typeof memoryCandidate === "number" ? memoryCandidate : undefined,
+    minResourceFee: typeof feeCandidate === "string" ? feeCandidate : undefined,
+  };
+};
+
 export class RpcService {
   private rpcUrl: string;
   private customHeaders: CustomHeaders;
+  private network?: NetworkKey;
 
-  constructor(rpcUrl: string, customHeaders: CustomHeaders = {}) {
+  constructor(rpcUrl: string, customHeaders: CustomHeaders = {}, network?: NetworkKey) {
     this.rpcUrl = rpcUrl.endsWith("/") ? rpcUrl.slice(0, -1) : rpcUrl;
     this.customHeaders = customHeaders;
+    this.network = network;
   }
 
   setCustomHeaders(headers: CustomHeaders): void {
@@ -52,15 +81,22 @@ export class RpcService {
         },
       };
 
-      const response = await fetch(`${this.rpcUrl}/rpc`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...this.customHeaders,
+      const { response, activeRpcUrl } = await fetchWithRpcFailover({
+        network: this.network,
+        primaryUrl: this.rpcUrl,
+        path: "/rpc",
+        timeoutMs: 30_000,
+        customHeaders: this.customHeaders,
+        init: {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(requestBody),
         },
-        body: JSON.stringify(requestBody),
-        signal: AbortSignal.timeout(30000),
       });
+
+      this.rpcUrl = activeRpcUrl;
 
       if (!response.ok) {
         const errorMessage = `RPC request failed with status ${response.status}: ${response.statusText}`;
@@ -99,7 +135,7 @@ export class RpcService {
       return {
         success: true,
         result: result?.returnValue ?? result?.result ?? result,
-        resourceUsage: result?.resourceUsage ?? result?.resource_usage,
+        resourceUsage: normalizeResourceUsage(result?.resourceUsage ?? result?.resource_usage),
       };
     } catch (error) {
       if (error instanceof TypeError && error.message.includes("fetch")) {

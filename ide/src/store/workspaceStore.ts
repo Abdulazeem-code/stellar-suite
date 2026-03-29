@@ -1,11 +1,13 @@
 import {
   DEFAULT_CUSTOM_RPC,
   NETWORK_CONFIG,
+  type CustomHeaders,
   NetworkKey,
 } from "@/lib/networkConfig";
 import { FileNode, sampleContracts } from "@/lib/sample-contracts";
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { persist, createJSONStorage } from "zustand/middleware";
+import { idbStorage } from "@/utils/idbStorage";
 
 interface TabInfo {
   path: string[];
@@ -21,11 +23,44 @@ export type MobilePanel =
   | "security";
 export type SidebarTab =
   | "explorer"
+  | "git"
+  | "comments"
   | "deployments"
   | "identities"
+  | "multisig"
+  | "liquidity"
   | "search"
-  | "security";
+  | "security"
+  | "tests"
+  | "fuzzing"
+  | "outline"
+  | "inspector"
+  | "references"
+  | "binary-diff"
+  | "benchmarks"
+  | "audit"
+  | "assets"
+  | "tutorials";
 export type BuildState = "idle" | "building" | "success" | "error";
+
+export interface WorkspaceTextFile {
+  path: string;
+  content: string;
+}
+
+export type MockLedgerEntryType = "account" | "contractData" | "tokenBalance";
+
+export interface MockLedgerEntry {
+  id: string;
+  type: MockLedgerEntryType;
+  key: string;
+  value: string;
+  metadata?: Record<string, string>;
+}
+
+export interface MockLedgerState {
+  entries: MockLedgerEntry[];
+}
 
 interface WorkspaceState {
   // File System State
@@ -54,8 +89,8 @@ interface WorkspaceState {
   mobilePanel: MobilePanel;
   isExplorerDragActive: boolean;
   leftSidebarTab: SidebarTab;
-
-  // Hydration State
+  mockLedgerState: MockLedgerState;
+  diffViewPath: string[] | null;
   hydrationComplete: boolean;
 
   // File Actions
@@ -79,9 +114,7 @@ interface WorkspaceState {
   setCustomHeaders: (headers: CustomHeaders) => void;
 
   // UI Actions
-  setTerminalExpanded: (
-    expanded: boolean | ((prev: boolean) => boolean),
-  ) => void;
+  setTerminalExpanded: (expanded: boolean | ((prev: boolean) => boolean)) => void;
   setTerminalOutput: (output: string | ((prev: string) => string)) => void;
   setIsCompiling: (isCompiling: boolean) => void;
   setBuildState: (state: BuildState) => void;
@@ -93,7 +126,10 @@ interface WorkspaceState {
   setMobilePanel: (panel: MobilePanel) => void;
   setIsExplorerDragActive: (active: boolean) => void;
   setLeftSidebarTab: (tab: SidebarTab) => void;
+  setMockLedgerState: (state: MockLedgerState) => void;
+  clearMockLedgerState: () => void;
   appendTerminalOutput: (chunk: string) => void;
+  setDiffViewPath: (path: string[] | null) => void;
 
   // Misc Actions
   setHydrationComplete: (ready: boolean) => void;
@@ -120,6 +156,22 @@ const findParent = (
   const parent = findNode(nodes, pathParts.slice(0, -1));
   return parent?.children ?? null;
 };
+
+export function flattenWorkspaceFiles(
+  nodes: FileNode[],
+  parentPath: string[] = []
+): WorkspaceTextFile[] {
+  const result: WorkspaceTextFile[] = [];
+  for (const node of nodes) {
+    const nextPath = [...parentPath, node.name];
+    if (node.type === "folder" && node.children) {
+      result.push(...flattenWorkspaceFiles(node.children, nextPath));
+    } else if (node.type === "file") {
+      result.push({ path: nextPath.join("/"), content: node.content ?? "" });
+    }
+  }
+  return result;
+}
 
 export const useWorkspaceStore = create<WorkspaceState>()(
   persist(
@@ -150,8 +202,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       mobilePanel: "none",
       isExplorerDragActive: false,
       leftSidebarTab: "explorer",
-
-      // Initial Hydration State
+      mockLedgerState: { entries: [] },
+      diffViewPath: null,
       hydrationComplete: false,
 
       // File Actions Implementation
@@ -277,11 +329,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           ) {
             nextActivePath = [...nextPath, ...activeTabPath.slice(path.length)];
           }
-          set({
-            files: nextFiles,
-            openTabs: nextTabs,
-            activeTabPath: nextActivePath,
-          });
+          set({ files: nextFiles, openTabs: nextTabs, activeTabPath: nextActivePath });
         }
       },
 
@@ -334,14 +382,18 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       setIsExplorerDragActive: (isExplorerDragActive) =>
         set({ isExplorerDragActive }),
       setLeftSidebarTab: (leftSidebarTab) => set({ leftSidebarTab }),
+      setMockLedgerState: (mockLedgerState) => set({ mockLedgerState }),
+      clearMockLedgerState: () => set({ mockLedgerState: { entries: [] } }),
       appendTerminalOutput: (chunk) =>
         set((state) => ({ terminalOutput: state.terminalOutput + chunk })),
+      setDiffViewPath: (diffViewPath) => set({ diffViewPath }),
 
-      // Misc Actions Implementation
+      // Misc Actions
       setHydrationComplete: (ready) => set({ hydrationComplete: ready }),
     }),
     {
       name: "stellar-suite-workspace-store",
+      storage: createJSONStorage(() => idbStorage),
       partialize: (state) => ({
         network: state.network,
         customRpcUrl: state.customRpcUrl,
@@ -352,6 +404,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         files: state.files,
         openTabs: state.openTabs,
         activeTabPath: state.activeTabPath,
+        mockLedgerState: state.mockLedgerState,
       }),
       onRehydrateStorage: () => (state) => {
         if (state) {
